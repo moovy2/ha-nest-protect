@@ -1,15 +1,17 @@
 """Tests for NestClient."""
+
 from unittest.mock import patch
 
-from aiohttp import web
 import pytest
+from aiohttp import ClientSession, web
+from aiohttp.test_utils import TestServer
 
 from custom_components.nest_protect.pynest.client import NestClient
 from custom_components.nest_protect.pynest.const import NEST_REQUEST
 
 
 @pytest.mark.enable_socket
-async def test_get_access_token_from_cookies_success(socket_enabled, aiohttp_client):
+async def test_get_access_token_from_cookies_success(socket_enabled):
     """Test getting an access token."""
 
     async def make_token_response(request):
@@ -27,15 +29,16 @@ async def test_get_access_token_from_cookies_success(socket_enabled, aiohttp_cli
 
     app = web.Application()
     app.router.add_get("/issue-token", make_token_response)
-    client = await aiohttp_client(app)
 
-    nest_client = NestClient(client)
-    auth = await nest_client.get_access_token_from_cookies("issue-token", "cookies")
-    assert auth.access_token == "new-access-token"
+    async with TestServer(app) as server, ClientSession() as session:
+        nest_client = NestClient(session)
+        url = server.make_url("/issue-token")
+        auth = await nest_client.get_access_token_from_cookies(str(url), "cookies")
+        assert auth.access_token == "new-access-token"
 
 
 @pytest.mark.enable_socket
-async def test_get_access_token_from_cookies_error(socket_enabled, aiohttp_client):
+async def test_get_access_token_from_cookies_error(socket_enabled):
     """Test failure while getting an access token."""
 
     async def make_token_response(request):
@@ -45,15 +48,16 @@ async def test_get_access_token_from_cookies_error(socket_enabled, aiohttp_clien
 
     app = web.Application()
     app.router.add_get("/issue-token", make_token_response)
-    client = await aiohttp_client(app)
 
-    nest_client = NestClient(client)
-    with pytest.raises(Exception, match="invalid_grant"):
-        await nest_client.get_access_token_from_cookies("issue-token", "cookies")
+    async with TestServer(app) as server, ClientSession() as session:
+        nest_client = NestClient(session)
+        url = server.make_url("/issue-token")
+        with pytest.raises(Exception, match="invalid_grant"):
+            await nest_client.get_access_token_from_cookies(str(url), "cookies")
 
 
 @pytest.mark.enable_socket
-async def test_get_first_data_success(socket_enabled, aiohttp_client):
+async def test_get_first_data_success(socket_enabled):
     """Test getting initial data from the API."""
 
     async def api_response(request):
@@ -93,14 +97,18 @@ async def test_get_first_data_success(socket_enabled, aiohttp_client):
     app = web.Application()
     app.router.add_post("/api/0.1/user/example-user/app_launch", api_response)
     app["request"] = []
-    client = await aiohttp_client(app)
 
-    nest_client = NestClient(client)
-    with patch(
-        "custom_components.nest_protect.pynest.client.APP_LAUNCH_URL_FORMAT",
-        "/api/0.1/user/{user_id}/app_launch",
-    ):
-        result = await nest_client.get_first_data("access-token", "example-user")
+    async with TestServer(app) as server, ClientSession() as session:
+        nest_client = NestClient(session)
+        base = str(server.make_url("")).rstrip("/")
+        with (
+            patch.object(nest_client.environment, "host", base),
+            patch(
+                "custom_components.nest_protect.pynest.client.APP_LAUNCH_URL_FORMAT",
+                "{host}/api/0.1/user/{user_id}/app_launch",
+            ),
+        ):
+            result = await nest_client.get_first_data("access-token", "example-user")
 
     assert len(app["request"]) == 1
     (headers, json_request) = app["request"][0]
@@ -108,4 +116,7 @@ async def test_get_first_data_success(socket_enabled, aiohttp_client):
     assert headers.get("X-nl-user-id") == "example-user"
     assert json_request == NEST_REQUEST
     assert result.updated_buckets == []
-    assert result.service_urls["urls"]["transport_url"] == "https://xxxx.transport.home.nest.com"
+    assert (
+        result.service_urls["urls"]["transport_url"]
+        == "https://xxxx.transport.home.nest.com"
+    )

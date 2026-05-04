@@ -9,7 +9,7 @@ from homeassistant.helpers.entity import EntityCategory
 
 from . import HomeAssistantNestProtectData
 from .const import DOMAIN, LOGGER
-from .entity import NestDescriptiveEntity
+from .entity import NestUpdatableEntity
 
 
 @dataclass
@@ -48,13 +48,19 @@ async def async_setup_entry(hass, entry, async_add_devices):
         for key in device.value:
             if description := supported_keys.get(key):
                 entities.append(
-                    NestProtectSelect(device, description, data.areas, data.client)
+                    NestProtectSelect(
+                        device,
+                        description,
+                        data.areas,
+                        data.client,
+                        data.session_manager,
+                    )
                 )
 
     async_add_devices(entities)
 
 
-class NestProtectSelect(NestDescriptiveEntity, SelectEntity):
+class NestProtectSelect(NestUpdatableEntity, SelectEntity):
     """Representation of a Nest Protect Select."""
 
     entity_description: NestProtectSelectDescription
@@ -84,17 +90,5 @@ class NestProtectSelect(NestDescriptiveEntity, SelectEntity):
             }
         ]
 
-        if not self.client.nest_session or self.client.nest_session.is_expired():
-            if not self.client.auth or self.client.auth.is_expired():
-                await self.client.get_access_token()
-
-            await self.client.authenticate(self.client.auth.access_token)
-
-        result = await self.client.update_objects(
-            self.client.nest_session.access_token,
-            self.client.nest_session.userid,
-            self.client.transport_url,
-            objects,
-        )
-
+        result = await self._async_update_objects(objects)
         LOGGER.debug(result)
